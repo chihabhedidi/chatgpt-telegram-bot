@@ -1,9 +1,7 @@
-from __future__ import annotations
+
 import datetime
 import logging
 import os
-
-import tiktoken
 
 import openai
 
@@ -56,8 +54,8 @@ def localized_text(key, bot_language):
     except KeyError:
         logging.warning(f"No translation available for bot_language code '{bot_language}' and key '{key}'")
         # Fallback to English if the translation is not available
-        if key in translations['en']:
-            return translations['en'][key]
+        if key in translations[bot_language]:
+            return translations[bot_language][key]
         else:
             logging.warning(f"No english definition found for key '{key}' in translations.json")
             # return key as text
@@ -80,6 +78,28 @@ class OpenAIHelper:
         self.conversations: dict[int: list] = {}  # {chat_id: history}
         self.last_updated: dict[int: datetime] = {}  # {chat_id: last_update_timestamp}
 
+    def __count_tokens_manually(self, messages) -> int:
+        """
+        Counts the number of tokens required to send the given messages.
+        :param messages: the messages to send
+        :return: the number of tokens required
+        """
+        total_tokens = 0
+        for message in messages:
+            role = message["role"]
+            content = message["content"]
+
+            # Count tokens for role and content
+            tokens_for_role = len(role.split())
+            tokens_for_content = len(content.split())
+
+            # Assuming each message has a structure like "role: content"
+            total_tokens += tokens_for_role + tokens_for_content + 1  # 1 for the separator ':'
+
+        # Adding tokens for other parts of the conversation
+        total_tokens += 3  # Every reply is primed with "assistant"
+
+        return total_tokens
     def get_conversation_stats(self, chat_id: int) -> tuple[int, int]:
         """
         Gets the number of messages and tokens used in the conversation.
@@ -312,28 +332,28 @@ class OpenAIHelper:
         :return: the number of tokens required
         """
         model = self.config['model']
-        try:
-            encoding = tiktoken.encoding_for_model(model)
-        except KeyError:
-            encoding = tiktoken.get_encoding("gpt-3.5-turbo")
-
         if model in GPT_3_MODELS + GPT_3_16K_MODELS:
-            tokens_per_message = 4  # every message follows <|start|>{role/name}\n{content}<|end|>\n
             tokens_per_name = -1  # if there's a name, the role is omitted
         elif model in GPT_4_MODELS + GPT_4_32K_MODELS:
-            tokens_per_message = 3
             tokens_per_name = 1
         else:
             raise NotImplementedError(f"""num_tokens_from_messages() is not implemented for model {model}.""")
-        num_tokens = 0
+
+        total_tokens = 0
         for message in messages:
-            num_tokens += tokens_per_message
-            for key, value in message.items():
-                num_tokens += len(encoding.encode(value))
-                if key == "name":
-                    num_tokens += tokens_per_name
-        num_tokens += 3  # every reply is primed with <|start|>assistant<|message|>
-        return num_tokens
+            role = message["role"]
+            content = message["content"]
+
+            # Count tokens for role and content
+            tokens_for_role = len(role.split())
+            tokens_for_content = len(content.split())
+
+            total_tokens += tokens_for_role + tokens_for_content + tokens_per_name
+
+        # Adding tokens for other parts of the conversation
+        total_tokens += 3  # Every reply is primed with "assistant"
+
+        return total_tokens
 
     def get_billing_current_month(self):
         """Gets billed usage for current month from OpenAI API.
